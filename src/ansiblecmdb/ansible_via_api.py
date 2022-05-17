@@ -1,6 +1,7 @@
 from ansible.parsing.dataloader import DataLoader
 from ansible.inventory.manager import InventoryManager
 from ansible.vars.manager import VariableManager
+from ansible.vars.hostvars import HostVars
 
 from ansiblecmdb import Ansible
 
@@ -20,14 +21,7 @@ class AnsibleViaAPI(Ansible):
         loader = DataLoader()
         inventory = InventoryManager(loader=loader, sources=self.inventory_paths)
         variable_manager = VariableManager(loader=loader, inventory=inventory)
-
-        # some Ansible variables we don't need.
-        ignore = ['ansible_playbook_python',
-                  'groups',
-                  'inventory_dir',
-                  'inventory_file',
-                  'omit',
-                  'playbook_dir']
+        hostvars = HostVars(inventory, variable_manager, loader)
 
         # Handle limits here because Ansible understands more complex
         # limit syntax than ansible-cmdb (e.g. globbing matches []?*
@@ -44,15 +38,29 @@ class AnsibleViaAPI(Ansible):
                     del self.hosts[h]
 
         for host in inventory.get_hosts():
-            vars = variable_manager.get_vars(host=host)
-            for key in ignore:
-                vars.pop(key, None)
+
+            vars = hostvars[host.name]
 
             hostname = vars['inventory_hostname']
-            groupnames = vars.pop('group_names', [])
-            merge_host_key_val(self.hosts, hostname, 'name', hostname)
-            merge_host_key_val(self.hosts, hostname, 'groups', set(groupnames))
-            merge_host_key_val(self.hosts, hostname, 'hostvars', vars)
+            self.update_hostvars(hostname, {
+                'name': hostname,
+                'groups': vars['group_names'],
+                'hostvars': vars
+            })
+
+    def update_hostvars(self, hostname, key_values):
+        """
+        Update just the hostvars for a host, creating it if it did not exist
+        from the fact collection stage.
+        """
+        default_empty_host = {
+            'name': hostname,
+            'groups': [],
+            'hostvars': {}
+        }
+        host_info = self.hosts.get(hostname, default_empty_host)
+        host_info.update(key_values)
+        self.hosts[hostname] = host_info
 
     def get_hosts(self):
         """
@@ -61,43 +69,3 @@ class AnsibleViaAPI(Ansible):
         # We override this method since we already applied the limit
         # when we loaded the inventory.
         return self.hosts
-
-
-def merge_host_key_val(hosts_dict, hostname, key, val):
-    """
-    Update hosts_dict[`hostname`][`key`] with `val`, taking into
-    account all the possibilities of missing keys and merging
-    `val` into an existing list, set or dictionary target value.
-    When merging into a dict target value any matching keys will
-    be overwritten by the new value.  Merging into a list or set
-    target value does not remove existing entries but instead adds
-    the new values to the collection.  If the target value is
-    is not a dict or collection it will be overwritten.
-
-    This will be called with key in ['hostvars', 'groups', 'name'],
-    although the implementation would work with any hashable key.
-    """
-    if hostname not in hosts_dict:
-        hosts_dict[hostname] = {
-            'name': hostname,
-            'hostvars': {},
-            'groups': set()
-        }
-
-    hostdata = hosts_dict[hostname]
-    if key not in hostdata:
-        hostdata[key] = val
-        return
-
-    # We handle the list case because the analogous util.deepupdate
-    # does.  It might be needed in deepupdate for facts, but the
-    # host inventory that we build is all dicts and sets.
-    target = hostdata[key]
-    if hasattr(target, 'update'):
-        target.update(val)   # merge into target dict
-    elif hasattr(target, 'union'):
-        target.union(val)    # union into target set
-    elif hasattr(target, 'extend'):
-        target.extend(val)   # extend target list
-    else:
-        hostdata[key] = val  # overwrite non-mergeable target value
