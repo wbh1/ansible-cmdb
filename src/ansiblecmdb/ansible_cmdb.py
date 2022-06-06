@@ -285,7 +285,8 @@ class Ansible(object):
             break
 
         for fname in flist:
-            if fname.startswith('.'):
+            # Skip hidden files and inventory cache(s)
+            if fname.startswith('.') or fname.startswith('ansible_inventory_'):
                 continue
             self.log.debug("Reading host facts from {0}".format(os.path.join(fact_dir, fname)))
             hostname = fname
