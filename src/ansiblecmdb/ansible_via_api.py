@@ -32,10 +32,10 @@ class AnsibleViaAPI(Ansible):
         # we do the simplest thing that can work.
         if self.limit:
             inventory.subset(self.limit)
-            limited_hosts = inventory.get_hosts()
-            for h in self.hosts.keys():
-                if h not in limited_hosts:
-                    del self.hosts[h]
+
+        # Discard facts from hosts not in the inventory from the result set
+        for host in set(self.hosts.keys()).difference(set(inventory.hosts.keys())):
+            self.hosts.pop(host)
 
         for host in inventory.get_hosts():
 
